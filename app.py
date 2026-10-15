@@ -161,4 +161,68 @@ if run_simple or run_compare:
                                                                      "H [kJ/kg]": "{:.2f}", "S [kJ/(kg K)]": "{:.4f}"}))
             
             st.subheader("Desempenho dos Equipamentos")
-            df_
+            df_eq = pd.DataFrame(equipment_results).drop(columns=["st_s", "T_in [°C]"], errors="ignore")
+            st.dataframe(df_eq.style.format(precision=2))
+
+        # --- BLOCO: DIAGRAMA P-h (PLOTLY) ---
+        with col_res2:
+            st.subheader("Diagrama P-h Interativo")
+            fig = go.Figure()
+
+            try:
+                T_sat_range = np.linspace(Leachman.TTRIPLE_L + 0.1, Leachman.TC_L - 0.2, 80)
+                h_L, h_V, p_sat = [], [], []
+                for T in T_sat_range:
+                    sat_state = Leachman.l_sat_state_T(T)
+                    h_L.append(sat_state['hL'])
+                    h_V.append(sat_state['hV'])
+                    p_sat.append(sat_state['P_Pa'] / 1e5)
+
+                fig.add_trace(go.Scatter(x=h_L, y=p_sat, mode='lines', line=dict(color='gray', dash='dash'), name='Líquido Saturado'))
+                fig.add_trace(go.Scatter(x=h_V, y=p_sat, mode='lines', line=dict(color='gray', dash='dash'), name='Vapor Saturado'))
+            except Exception as e:
+                st.warning(f"Não foi possível desenhar o envelope de saturação: {e}")
+
+            # Corrigido: Usando as chaves exatas geradas na formatação da tabela
+            H_vals = [s['H [kJ/kg]'] for s in stream_results]
+            P_vals = [s['P [bar]'] for s in stream_results]
+            text_labels = [f"Est. {i+1}" for i in range(len(stream_results))]
+            
+            fig.add_trace(go.Scatter(
+                x=H_vals, y=P_vals, mode='lines+markers+text',
+                text=text_labels, textposition="top center",
+                name='Caminho Real', line=dict(color='red', width=3),
+                marker=dict(size=10, symbol='circle', color='darkred')
+            ))
+
+            for m in equipment_results:
+                if "st_s" in m:
+                    idx = int(m["Etapa"][0])
+                    # Corrigido: Usando as chaves exatas
+                    H_in = stream_results[idx-1]["H [kJ/kg]"]
+                    P_in = stream_results[idx-1]["P [bar]"]
+                    H_out_s = m["st_s"]["H"]
+                    P_out_s = m["st_s"]["P_bar"]
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[H_in, H_out_s], y=[P_in, P_out_s],
+                        mode='lines+markers', name=f'Processo Isentrópico ({m["Tipo"]})',
+                        line=dict(color='blue', width=2, dash='dot'),
+                        marker=dict(size=6, color='blue')
+                    ))
+
+            fig.update_layout(
+                xaxis_title="Entalpia (kJ/kg)",
+                yaxis_title="Pressão (bar)",
+                yaxis_type="log",
+                margin=dict(l=20, r=20, t=30, b=20),
+                legend=dict(x=0.02, y=0.98),
+                height=500
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.caption("No processo de estrangulamento da Válvula, observe o comportamento vertical da linha (Entalpia constante). O aquecimento residual (Efeito Joule-Thomson) ocorre porque, para fluídos reais nestas condições, a isoterma tem curvatura no diagrama P-h.")
+
+    except Exception as e:
+        st.error(f"Erro durante a execução: {str(e)}")
