@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from streamlit_flow import streamlit_flow
 from streamlit_flow.elements import StreamlitFlowNode, StreamlitFlowEdge
+from streamlit_flow.state import StreamlitFlowState  # NOVA IMPORTAÇÃO
 from thermo_engine import ThermoEngine
 import unit_operations as uo
 import Leachman
@@ -112,7 +113,7 @@ if executar or comparar:
     nodes.append(StreamlitFlowNode(
         id='feed',
         pos=(50, 150),
-        data={'label': f"🟡 Alimentação\n{P1} bar | {T1}°C"},
+        data={'content': f"🟡 Alimentação\n{P1} bar | {T1}°C"},
         node_type='input',
         source_position='right',
         target_position='left'
@@ -137,7 +138,7 @@ if executar or comparar:
         nodes.append(StreamlitFlowNode(
             id=node_id,
             pos=(x_pos, 150),
-            data={'label': node_text},
+            data={'content': node_text},
             node_type='default',
             source_position='right',
             target_position='left'
@@ -160,7 +161,7 @@ if executar or comparar:
     nodes.append(StreamlitFlowNode(
         id='product',
         pos=(x_pos, 150),
-        data={'label': f"📦 Produto H2\n{st_final['P [bar]']:.0f} bar | {st_final['T [°C]']:.1f}°C"},
+        data={'content': f"📦 Produto H2\n{st_final['P [bar]']:.0f} bar | {st_final['T [°C]']:.1f}°C"},
         node_type='output',
         source_position='right',
         target_position='left'
@@ -173,8 +174,11 @@ if executar or comparar:
         label=f"S{len(stream_results)}"
     ))
 
-    # Desenha o PFD na tela
-    streamlit_flow("pfd_canvas", nodes=nodes, edges=edges, fit_view=True, height=400)
+    # ATUALIZAÇÃO DA API: Encapsulamento dos elementos no StreamlitFlowState
+    flow_state = StreamlitFlowState(nodes, edges)
+
+    # Desenha o PFD na tela usando o state
+    streamlit_flow("pfd_canvas", state=flow_state, fit_view=True, height=400)
     
     st.divider()
 
