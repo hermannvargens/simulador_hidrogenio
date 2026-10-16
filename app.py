@@ -13,15 +13,18 @@ st.set_page_config(page_title="Simulador H2 - PFD Flow", layout="wide")
 st.title("⚡ Simulador Interativo: Condicionamento de $H_2$")
 
 # ==========================================
-# 0. INICIALIZAÇÃO DE MEMÓRIA (EVITA LOOP)
+# 0. INICIALIZAÇÃO DE MEMÓRIA E ESTADOS
 # ==========================================
 if "simulacao_realizada" not in st.session_state:
     st.session_state.simulacao_realizada = False
 if "modo_comparativo" not in st.session_state:
     st.session_state.modo_comparativo = False
+if "sequence" not in st.session_state:
+    # Sequência inicial padrão sugerida no problema
+    st.session_state.sequence = ["Compressor", "Aftercooler", "Válvula de Controle"]
 
 # ==========================================
-# 1. BARRA LATERAL: ENTRADAS E FLUXOGRAMA
+# 1. BARRA LATERAL: ENTRADAS GERAIS
 # ==========================================
 st.sidebar.header("1. Condições de Alimentação")
 modelo_opt = st.sidebar.radio("Equação de Estado", ["REAL (Leachman)", "IDEAL (Gás Ideal)"])
@@ -32,35 +35,58 @@ m_dot = m_dot_kgh / 3600.0
 T1 = st.sidebar.number_input("Temperatura inicial [°C]", value=25.0)
 P1 = st.sidebar.number_input("Pressão inicial [bar]", value=20.0)
 
-st.sidebar.header("2. Fluxograma de Processo")
-equipamentos_possiveis = ["Compressor", "Aftercooler", "Válvula de Controle", "Expansor"]
-flowsheet_sequence = st.sidebar.multiselect(
-    "Construa sua topologia (ordem de fluxo):",
-    options=equipamentos_possiveis,
-    default=["Compressor", "Aftercooler", "Válvula de Controle"]
-)
+# ==========================================
+# 2. BARRA LATERAL: CONSTRUTOR DE FLUXOGRAMA
+# ==========================================
+st.sidebar.header("2. Estrutura do Processo")
 
-params = {}
-with st.sidebar.expander("Especificações dos Equipamentos", expanded=True):
-    if "Compressor" in flowsheet_sequence:
-        st.markdown("**Compressor (K-101)**")
-        params["comp_P2"] = st.number_input("P descarga [bar]", value=100.0, key="c_p2")
-        params["comp_eta"] = st.number_input("Eficiência Isentrópica", value=0.80, key="c_eta")
-    if "Aftercooler" in flowsheet_sequence:
-        st.markdown("**Aftercooler (E-101)**")
-        params["ac_T3"] = st.number_input("T saída [°C]", value=35.0, key="ac_t3")
-        params["ac_Twin"] = st.number_input("T água in [°C]", value=20.0, key="ac_twin")
-        params["ac_Twout"] = st.number_input("T água out [°C]", value=30.0, key="ac_twout")
-    if "Válvula de Controle" in flowsheet_sequence:
-        st.markdown("**Válvula JT (V-101)**")
-        params["valv_P4"] = st.number_input("P saída [bar]", value=60.0, key="v_p4")
-    if "Expansor" in flowsheet_sequence:
-        st.markdown("**Turbina/Expansor (EX-101)**")
-        params["exp_P4"] = st.number_input("P descarga [bar]", value=60.0, key="e_p4")
-        params["exp_eta"] = st.number_input("Eficiência Isentrópica", value=0.80, key="e_eta")
+equipamentos_possiveis = ["Compressor", "Aftercooler", "Válvula de Controle", "Expansor"]
+
+# Controles para ADICIONAR novo equipamento
+add_col1, add_col2 = st.sidebar.columns([3, 2])
+novo_eq = add_col1.selectbox("Novo equipamento", equipamentos_possiveis, label_visibility="collapsed")
+if add_col2.button("➕ Adicionar"):
+    st.session_state.sequence.append(novo_eq)
+    st.session_state.simulacao_realizada = False # Reseta a tela se o processo mudou
+    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Especificações dos Equipamentos")
+
+params = []
+to_remove = None
+
+# Renderiza as caixas de configuração dinamicamente e permite REMOVER equipamentos
+for i, eq in enumerate(st.session_state.sequence):
+    with st.sidebar.expander(f"{i+1}. {eq}", expanded=True):
+        p = {}
+        if eq == "Compressor":
+            p["P_out"] = st.number_input("P descarga [bar]", value=100.0, key=f"pout_{i}")
+            p["eta"] = st.number_input("Eficiência Isentrópica", value=0.80, key=f"eta_{i}")
+        elif eq == "Aftercooler":
+            p["T_out"] = st.number_input("T saída do H2 [°C]", value=35.0, key=f"tout_{i}")
+            p["Tw_in"] = st.number_input("T água in [°C]", value=20.0, key=f"twin_{i}")
+            p["Tw_out"] = st.number_input("T água out [°C]", value=30.0, key=f"twout_{i}")
+        elif eq == "Válvula de Controle":
+            p["P_out"] = st.number_input("P saída [bar]", value=60.0, key=f"pout_{i}")
+        elif eq == "Expansor":
+            p["P_out"] = st.number_input("P descarga [bar]", value=60.0, key=f"pout_{i}")
+            p["eta"] = st.number_input("Eficiência Isentrópica", value=0.80, key=f"eta_{i}")
+        
+        params.append(p)
+        
+        # Botão de remover equipamento específico
+        if st.button("❌ Remover etapa", key=f"rem_{i}"):
+            to_remove = i
+
+# Remove o item da lista e recarrega a barra lateral corretamente
+if to_remove is not None:
+    st.session_state.sequence.pop(to_remove)
+    st.session_state.simulacao_realizada = False
+    st.rerun()
 
 # ==========================================
-# 2. MOTOR DE CÁLCULO
+# 3. MOTOR DE CÁLCULO DINÂMICO
 # ==========================================
 def rodar_simulacao(mod_key):
     thermo = ThermoEngine(model_type=mod_key)
@@ -73,15 +99,15 @@ def rodar_simulacao(mod_key):
                        "S [kJ/(kg K)]": current_stream["S"]}]
     equipment_results = []
 
-    for idx, equip in enumerate(flowsheet_sequence, start=1):
+    for idx, (equip, p) in enumerate(zip(st.session_state.sequence, params), start=1):
         if equip == "Compressor":
-            current_stream, metrics = uo.simular_compressor(current_stream, params["comp_P2"], params["comp_eta"], thermo)
+            current_stream, metrics = uo.simular_compressor(current_stream, p["P_out"], p["eta"], thermo)
         elif equip == "Aftercooler":
-            current_stream, metrics = uo.simular_aftercooler(current_stream, params["ac_T3"], thermo, Tw_in=params["ac_Twin"], Tw_out=params["ac_Twout"])
+            current_stream, metrics = uo.simular_aftercooler(current_stream, p["T_out"], thermo, Tw_in=p["Tw_in"], Tw_out=p["Tw_out"])
         elif equip == "Válvula de Controle":
-            current_stream, metrics = uo.simular_valvula(current_stream, params["valv_P4"], thermo)
+            current_stream, metrics = uo.simular_valvula(current_stream, p["P_out"], thermo)
         elif equip == "Expansor":
-            current_stream, metrics = uo.simular_expansor(current_stream, params["exp_P4"], params["exp_eta"], thermo)
+            current_stream, metrics = uo.simular_expansor(current_stream, p["P_out"], p["eta"], thermo)
 
         metrics["Etapa"] = f"{idx}. {equip}"
         equipment_results.append(metrics)
@@ -95,145 +121,162 @@ def rodar_simulacao(mod_key):
     return stream_results, equipment_results
 
 # ==========================================
-# 3. CONTROLES DE EXECUÇÃO
+# 4. CONTROLES DE EXECUÇÃO
 # ==========================================
 col_btn1, col_btn2 = st.columns(2)
 executar_click = col_btn1.button(f"Executar Simulação ({model_key})", type="primary", width="stretch")
 comparar_click = col_btn2.button("🔍 Comparar Ideal vs Real", width="stretch")
 
 if executar_click or comparar_click:
-    with st.spinner("Processando balanços termodinâmicos e gerando PFD..."):
-        if comparar_click:
-            str_ideal, eq_ideal = rodar_simulacao("IDEAL")
-            str_real, eq_real = rodar_simulacao("REAL")
+    if len(st.session_state.sequence) == 0:
+        st.warning("Adicione pelo menos um equipamento no fluxograma antes de simular.")
+    else:
+        with st.spinner("Processando balanços termodinâmicos e gerando PFD..."):
+            if comparar_click:
+                str_ideal, eq_ideal = rodar_simulacao("IDEAL")
+                str_real, eq_real = rodar_simulacao("REAL")
+                
+                st.session_state.eq_ideal = eq_ideal
+                st.session_state.eq_real = eq_real
+                st.session_state.stream_results = str_real
+                st.session_state.equipment_results = eq_real
+                st.session_state.modo_comparativo = True
+            else:
+                stream_results, equipment_results = rodar_simulacao(model_key)
+                st.session_state.stream_results = stream_results
+                st.session_state.equipment_results = equipment_results
+                st.session_state.modo_comparativo = False
             
-            st.session_state.str_ideal = str_ideal
-            st.session_state.eq_ideal = eq_ideal
-            st.session_state.str_real = str_real
-            st.session_state.eq_real = eq_real
-            st.session_state.stream_results = str_real
-            st.session_state.equipment_results = eq_real
-            st.session_state.modo_comparativo = True
-        else:
-            stream_results, equipment_results = rodar_simulacao(model_key)
-            st.session_state.stream_results = stream_results
-            st.session_state.equipment_results = equipment_results
-            st.session_state.modo_comparativo = False
-        
-        # Gera o grafo do PFD interativo e salva na memória
-        nodes = []
-        edges = []
-        
-        nodes.append(StreamlitFlowNode(
-            id='feed',
-            pos=(50, 150),
-            data={'content': f"🟡 Alimentação\n{P1} bar | {T1}°C"},
-            node_type='input',
-            source_position='right',
-            target_position='left'
-        ))
-
-        prev_node = 'feed'
-        x_pos = 50
-        
-        for idx, (equip, metric) in enumerate(zip(flowsheet_sequence, st.session_state.equipment_results)):
-            node_id = f"block_{idx}"
-            x_pos += 300
+            # GERA O GRAFO DO PFD INTERATIVO
+            nodes = []
+            edges = []
             
-            node_text = f"⚙️ {equip}\n"
-            if "W_dot [kW]" in metric and metric["W_dot [kW]"] != 0:
-                node_text += f"W = {metric['W_dot [kW]']:.1f} kW\n"
-            if "Q_dot [kW]" in metric and metric["Q_dot [kW]"] != 0:
-                node_text += f"Q = {metric['Q_dot [kW]']:.1f} kW\n"
-            node_text += f"Exergia Dest. = {metric['E_destruida [kW]']:.1f} kW"
-
+            # Formatação em múltiplas linhas com HTML (<br>) garantindo a quebra
+            feed_text = (
+                f"🟡 <b>Alimentação</b><br>"
+                f"T = {P1} °C<br>"
+                f"P = {T1} bar"
+            )
             nodes.append(StreamlitFlowNode(
-                id=node_id,
-                pos=(x_pos, 150),
-                data={'content': node_text},
-                node_type='default',
+                id='feed',
+                pos=(50, 150),
+                data={'content': feed_text},
+                node_type='input',
                 source_position='right',
                 target_position='left'
             ))
 
-            st_out = st.session_state.stream_results[idx]
-            edges.append(StreamlitFlowEdge(
-                id=f"edge_{idx}",
-                source=prev_node,
-                target=node_id,
-                animated=True,
-                label=f"S{idx+1} ({st_out['P [bar]']:.0f} bar, {st_out['T [°C]']:.1f} °C)"
+            prev_node = 'feed'
+            x_pos = 50
+            
+            for idx, (equip, metric) in enumerate(zip(st.session_state.sequence, st.session_state.equipment_results), start=1):
+                node_id = f"block_{idx}"
+                x_pos += 300
+                st_out = st.session_state.stream_results[idx]
+                
+                # Monta os dados separados por linha
+                node_text = f"⚙️ <b>{idx}. {equip}</b><br>"
+                node_text += f"T = {st_out['T [°C]']:.1f} °C<br>"
+                node_text += f"P = {st_out['P [bar]']:.1f} bar<br>"
+                
+                if "W_dot [kW]" in metric and metric["W_dot [kW]"] != 0:
+                    node_text += f"Trabalho = {metric['W_dot [kW]']:.1f} kW<br>"
+                if "Q_dot [kW]" in metric and metric["Q_dot [kW]"] != 0:
+                    node_text += f"Calor = {metric['Q_dot [kW]']:.1f} kW<br>"
+                    
+                node_text += f"Exergia = {metric['E_destruida [kW]']:.1f} kW"
+
+                nodes.append(StreamlitFlowNode(
+                    id=node_id,
+                    pos=(x_pos, 150),
+                    data={'content': node_text},
+                    node_type='default',
+                    source_position='right',
+                    target_position='left'
+                ))
+
+                edges.append(StreamlitFlowEdge(
+                    id=f"edge_{idx}",
+                    source=prev_node,
+                    target=node_id,
+                    animated=True,
+                    label=f"S{idx}"
+                ))
+                prev_node = node_id
+
+            x_pos += 300
+            st_final = st.session_state.stream_results[-1]
+            
+            prod_text = (
+                f"📦 <b>Produto H2</b><br>"
+                f"T = {st_final['T [°C]']:.1f} °C<br>"
+                f"P = {st_final['P [bar]']:.1f} bar"
+            )
+            nodes.append(StreamlitFlowNode(
+                id='product',
+                pos=(x_pos, 150),
+                data={'content': prod_text},
+                node_type='output',
+                source_position='right',
+                target_position='left'
             ))
-            prev_node = node_id
+            
+            edges.append(StreamlitFlowEdge(
+                id="edge_final",
+                source=prev_node,
+                target='product',
+                animated=True,
+                label=f"S{len(st.session_state.stream_results)}"
+            ))
 
-        x_pos += 300
-        st_final = st.session_state.stream_results[-1]
-        nodes.append(StreamlitFlowNode(
-            id='product',
-            pos=(x_pos, 150),
-            data={'content': f"📦 Produto H2\n{st_final['P [bar]']:.0f} bar | {st_final['T [°C]']:.1f}°C"},
-            node_type='output',
-            source_position='right',
-            target_position='left'
-        ))
-        edges.append(StreamlitFlowEdge(
-            id="edge_final",
-            source=prev_node,
-            target='product',
-            animated=True,
-            label=f"S{len(st.session_state.stream_results)}"
-        ))
-
-        # O SEGREDO DO LOOP INFINITO ESTÁ AQUI: Salva o estado encapsulado no Session State
-        st.session_state.flow_state = StreamlitFlowState(nodes, edges)
-        st.session_state.simulacao_realizada = True
+            st.session_state.flow_state = StreamlitFlowState(nodes, edges)
+            st.session_state.simulacao_realizada = True
 
 # ==========================================
-# 4. RENDERIZAÇÃO DA INTERFACE (MANTIDA NA MEMÓRIA)
+# 5. RENDERIZAÇÃO DA INTERFACE 
 # ==========================================
-if st.session_state.simulacao_realizada:
+if st.session_state.simulacao_realizada and len(st.session_state.sequence) > 0:
     
-    # ------------------------------------------
-    # RENDERIZAÇÃO DO PFD INTERATIVO
-    # ------------------------------------------
     st.subheader("Process Flow Diagram (PFD)")
-    
-    streamlit_flow("pfd_canvas", state=st.session_state.flow_state, fit_view=True, height=400)
-    
+    streamlit_flow("pfd_canvas", state=st.session_state.flow_state, fit_view=True, height=450)
     st.divider()
 
-    # ------------------------------------------
     # TABELA DE COMPARAÇÃO (IDEAL VS REAL)
-    # ------------------------------------------
     if st.session_state.modo_comparativo:
         st.subheader("Comparativo de Desempenho Termodinâmico")
-        eq_i_dict = {m["Tipo"]: m for m in st.session_state.eq_ideal}
-        eq_r_dict = {m["Tipo"]: m for m in st.session_state.eq_real}
+        
+        # Como agora pode haver equipamentos repetidos, comparamos pelas Etapas iterativas
+        eq_i_dict = {m["Etapa"]: m for m in st.session_state.eq_ideal}
+        eq_r_dict = {m["Etapa"]: m for m in st.session_state.eq_real}
         comp_data = []
 
-        if "Compressor" in eq_r_dict:
-            comp_data.extend([
-                {"Métrica": "T2s Descarga Isentrópica (°C)", "Gás Ideal": eq_i_dict["Compressor"]["st_s"]["T_C"], "Gás Real (Leachman)": eq_r_dict["Compressor"]["st_s"]["T_C"]},
-                {"Métrica": "T2 Descarga Real (°C)", "Gás Ideal": eq_i_dict["Compressor"]["T_out [°C]"], "Gás Real (Leachman)": eq_r_dict["Compressor"]["T_out [°C]"]},
-                {"Métrica": "Potência do Compressor W_c (kW)", "Gás Ideal": eq_i_dict["Compressor"]["W_dot [kW]"], "Gás Real (Leachman)": eq_r_dict["Compressor"]["W_dot [kW]"]}
-            ])
-        if "Aftercooler" in eq_r_dict:
-            comp_data.extend([
-                {"Métrica": "Carga Térmica Q_HX (kW)", "Gás Ideal": eq_i_dict["Aftercooler"]["Q_dot [kW]"], "Gás Real (Leachman)": eq_r_dict["Aftercooler"]["Q_dot [kW]"]},
-                {"Métrica": "Vazão de Água M_w (kg/s)", "Gás Ideal": eq_i_dict["Aftercooler"]["Vazao_Agua [kg/s]"], "Gás Real (Leachman)": eq_r_dict["Aftercooler"]["Vazao_Agua [kg/s]"]}
-            ])
-        if "Válvula" in eq_r_dict:
-            JT_ideal = eq_i_dict["Válvula"]["T_out [°C]"] - eq_i_dict["Válvula"]["T_in [°C]"]
-            JT_real = eq_r_dict["Válvula"]["T_out [°C]"] - eq_r_dict["Válvula"]["T_in [°C]"]
-            comp_data.extend([
-                {"Métrica": "ΔT de Inversão (Joule-Thomson) (°C)", "Gás Ideal": JT_ideal, "Gás Real (Leachman)": JT_real}
-            ])
-        if "Expansor" in eq_r_dict:
-            comp_data.extend([
-                {"Métrica": "Potência Recuperada W_t (kW)", "Gás Ideal": eq_i_dict["Expansor"]["W_recuperado [kW]"], "Gás Real (Leachman)": eq_r_dict["Expansor"]["W_recuperado [kW]"]}
-            ])
+        for etapa_nome, m_real in eq_r_dict.items():
+            m_ideal = eq_i_dict[etapa_nome]
+            equip_tipo = m_real["Tipo"]
+            
+            if equip_tipo == "Compressor":
+                comp_data.extend([
+                    {"Equipamento": etapa_nome, "Métrica": "T2s Descarga Isentrópica (°C)", "Gás Ideal": m_ideal["st_s"]["T_C"], "Gás Real (Leachman)": m_real["st_s"]["T_C"]},
+                    {"Equipamento": etapa_nome, "Métrica": "T2 Descarga Real (°C)", "Gás Ideal": m_ideal["T_out [°C]"], "Gás Real (Leachman)": m_real["T_out [°C]"]},
+                    {"Equipamento": etapa_nome, "Métrica": "Potência do Compressor W_c (kW)", "Gás Ideal": m_ideal["W_dot [kW]"], "Gás Real (Leachman)": m_real["W_dot [kW]"]}
+                ])
+            elif equip_tipo == "Aftercooler":
+                comp_data.extend([
+                    {"Equipamento": etapa_nome, "Métrica": "Carga Térmica Q_HX (kW)", "Gás Ideal": m_ideal["Q_dot [kW]"], "Gás Real (Leachman)": m_real["Q_dot [kW]"]},
+                    {"Equipamento": etapa_nome, "Métrica": "Vazão de Água M_w (kg/s)", "Gás Ideal": m_ideal["Vazao_Agua [kg/s]"], "Gás Real (Leachman)": m_real["Vazao_Agua [kg/s]"]}
+                ])
+            elif equip_tipo == "Válvula":
+                JT_ideal = m_ideal["T_out [°C]"] - m_ideal["T_in [°C]"]
+                JT_real = m_real["T_out [°C]"] - m_real["T_in [°C]"]
+                comp_data.extend([
+                    {"Equipamento": etapa_nome, "Métrica": "ΔT (Efeito Joule-Thomson) (°C)", "Gás Ideal": JT_ideal, "Gás Real (Leachman)": JT_real}
+                ])
+            elif equip_tipo == "Expansor":
+                comp_data.extend([
+                    {"Equipamento": etapa_nome, "Métrica": "Potência Recuperada W_t (kW)", "Gás Ideal": m_ideal["W_recuperado [kW]"], "Gás Real (Leachman)": m_real["W_recuperado [kW]"]}
+                ])
         
-        comp_data.append({"Métrica": "Exergia Destruída Total (kW)", "Gás Ideal": sum(m["E_destruida [kW]"] for m in st.session_state.eq_ideal), "Gás Real (Leachman)": sum(m["E_destruida [kW]"] for m in st.session_state.eq_real)})
+        comp_data.append({"Equipamento": "Sistema Total", "Métrica": "Exergia Destruída Total (kW)", "Gás Ideal": sum(m["E_destruida [kW]"] for m in st.session_state.eq_ideal), "Gás Real (Leachman)": sum(m["E_destruida [kW]"] for m in st.session_state.eq_real)})
 
         for row in comp_data:
             r_val = row["Gás Real (Leachman)"]
@@ -242,9 +285,7 @@ if st.session_state.simulacao_realizada:
 
         st.dataframe(pd.DataFrame(comp_data).style.format({"Gás Ideal": "{:.3f}", "Gás Real (Leachman)": "{:.3f}", "Desvio (%)": "{:.2f}%"}))
 
-    # ------------------------------------------
-    # DIAGRAMA P-h E TABELAS
-    # ------------------------------------------
+    # DIAGRAMA P-h E TABELAS TÉCNICAS
     col_tab, col_graf = st.columns([1, 1.2])
     
     with col_tab:
@@ -268,12 +309,23 @@ if st.session_state.simulacao_realizada:
 
         H_vals = [s['H [kJ/kg]'] for s in st.session_state.stream_results]
         P_vals = [s['P [bar]'] for s in st.session_state.stream_results]
-        fig.add_trace(go.Scatter(x=H_vals, y=P_vals, mode='lines+markers+text', text=[f"S{i+1}" for i in range(len(st.session_state.stream_results))], textposition="top center", name='Evolução Real', line=dict(color='red', width=3), marker=dict(size=10)))
+        fig.add_trace(go.Scatter(
+            x=H_vals, y=P_vals, mode='lines+markers+text', 
+            text=[f"S{i+1}" for i in range(len(st.session_state.stream_results))], 
+            textposition="top center", name='Evolução Real', 
+            line=dict(color='red', width=3), marker=dict(size=10)
+        ))
 
         for m in st.session_state.equipment_results:
             if "st_s" in m:
-                idx = int(m["Etapa"][0])
-                fig.add_trace(go.Scatter(x=[st.session_state.stream_results[idx-1]["H [kJ/kg]"], m["st_s"]["H"]], y=[st.session_state.stream_results[idx-1]["P [bar]"], m["st_s"]["P_bar"]], mode='lines+markers', name=f'Isentrópica ({m["Tipo"]})', line=dict(color='blue', width=2, dash='dot'), marker=dict(size=6)))
+                # Divide pela string do ponto para pegar sempre o índice numérico correto, caso ultrapasse 9 equipamentos
+                idx = int(m["Etapa"].split(".")[0])
+                fig.add_trace(go.Scatter(
+                    x=[st.session_state.stream_results[idx-1]["H [kJ/kg]"], m["st_s"]["H"]], 
+                    y=[st.session_state.stream_results[idx-1]["P [bar]"], m["st_s"]["P_bar"]], 
+                    mode='lines+markers', name=f'Isentrópica ({m["Tipo"]}-{idx})', 
+                    line=dict(color='blue', width=2, dash='dot'), marker=dict(size=6)
+                ))
 
         fig.update_layout(xaxis_title="Entalpia (kJ/kg)", yaxis_title="Pressão (bar)", yaxis_type="log", margin=dict(l=20, r=20, t=30, b=20), height=500)
         st.plotly_chart(fig, use_container_width=True)
