@@ -4,13 +4,19 @@ import numpy as np
 import plotly.graph_objects as go
 from streamlit_flow import streamlit_flow
 from streamlit_flow.elements import StreamlitFlowNode, StreamlitFlowEdge
-from streamlit_flow.state import StreamlitFlowState  # NOVA IMPORTAÇÃO
+from streamlit_flow.state import StreamlitFlowState
 from thermo_engine import ThermoEngine
 import unit_operations as uo
 import Leachman
 
 st.set_page_config(page_title="Simulador H2 - PFD Flow", layout="wide")
 st.title("⚡ Simulador Interativo: Condicionamento de $H_2$")
+
+# INICIALIZAÇÃO DO SESSION STATE PARA MANTER OS RESULTADOS NA TELA
+if "simulacao_realizada" not in st.session_state:
+    st.session_state.simulacao_realizada = False
+if "modo_comparativo" not in st.session_state:
+    st.session_state.modo_comparativo = False
 
 # ==========================================
 # 1. BARRA LATERAL: ENTRADAS E FLUXOGRAMA
@@ -87,15 +93,27 @@ def rodar_simulacao(mod_key):
     return stream_results, equipment_results
 
 # ==========================================
-# 3. INTERFACE E RENDERIZAÇÃO
+# 3. CONTROLES DE EXECUÇÃO
 # ==========================================
 col_btn1, col_btn2 = st.columns(2)
-executar = col_btn1.button(f"Executar Simulação ({model_key})", use_container_width=True, type="primary")
-comparar = col_btn2.button("🔍 Comparar Ideal vs Real", use_container_width=True)
+# Correção do warning usando width='stretch' em vez de use_container_width=True
+executar_click = col_btn1.button(f"Executar Simulação ({model_key})", type="primary", width="stretch")
+comparar_click = col_btn2.button("🔍 Comparar Ideal vs Real", width="stretch")
 
-if executar or comparar:
+if executar_click:
+    st.session_state.simulacao_realizada = True
+    st.session_state.modo_comparativo = False
+
+if comparar_click:
+    st.session_state.simulacao_realizada = True
+    st.session_state.modo_comparativo = True
+
+# ==========================================
+# 4. RENDERIZAÇÃO DA INTERFACE (MANTIDA PELO SESSION STATE)
+# ==========================================
+if st.session_state.simulacao_realizada:
     with st.spinner("Processando balanços termodinâmicos..."):
-        if comparar:
+        if st.session_state.modo_comparativo:
             str_ideal, eq_ideal = rodar_simulacao("IDEAL")
             str_real, eq_real = rodar_simulacao("REAL")
             stream_results, equipment_results = str_real, eq_real
@@ -109,7 +127,6 @@ if executar or comparar:
     nodes = []
     edges = []
     
-    # Nó de Alimentação
     nodes.append(StreamlitFlowNode(
         id='feed',
         pos=(50, 150),
@@ -122,12 +139,10 @@ if executar or comparar:
     prev_node = 'feed'
     x_pos = 50
     
-    # Construção iterativa de Nós e Arestas
     for idx, (equip, metric) in enumerate(zip(flowsheet_sequence, equipment_results)):
         node_id = f"block_{idx}"
         x_pos += 300
         
-        # Formata o texto do nó
         node_text = f"⚙️ {equip}\n"
         if "W_dot [kW]" in metric and metric["W_dot [kW]"] != 0:
             node_text += f"W = {metric['W_dot [kW]']:.1f} kW\n"
@@ -144,7 +159,6 @@ if executar or comparar:
             target_position='left'
         ))
 
-        # Aresta (Corrente) conectando o bloco anterior a este
         st_out = stream_results[idx]
         edges.append(StreamlitFlowEdge(
             id=f"edge_{idx}",
@@ -155,7 +169,6 @@ if executar or comparar:
         ))
         prev_node = node_id
 
-    # Nó final (Produto)
     x_pos += 300
     st_final = stream_results[-1]
     nodes.append(StreamlitFlowNode(
@@ -174,10 +187,7 @@ if executar or comparar:
         label=f"S{len(stream_results)}"
     ))
 
-    # ATUALIZAÇÃO DA API: Encapsulamento dos elementos no StreamlitFlowState
     flow_state = StreamlitFlowState(nodes, edges)
-
-    # Desenha o PFD na tela usando o state
     streamlit_flow("pfd_canvas", state=flow_state, fit_view=True, height=400)
     
     st.divider()
@@ -185,7 +195,7 @@ if executar or comparar:
     # ------------------------------------------
     # TABELA DE COMPARAÇÃO (IDEAL VS REAL)
     # ------------------------------------------
-    if comparar:
+    if st.session_state.modo_comparativo:
         st.subheader("Comparativo de Desempenho Termodinâmico")
         eq_i_dict = {m["Tipo"]: m for m in eq_ideal}
         eq_r_dict = {m["Tipo"]: m for m in eq_real}
@@ -256,4 +266,4 @@ if executar or comparar:
                 fig.add_trace(go.Scatter(x=[stream_results[idx-1]["H [kJ/kg]"], m["st_s"]["H"]], y=[stream_results[idx-1]["P [bar]"], m["st_s"]["P_bar"]], mode='lines+markers', name=f'Isentrópica ({m["Tipo"]})', line=dict(color='blue', width=2, dash='dot'), marker=dict(size=6)))
 
         fig.update_layout(xaxis_title="Entalpia (kJ/kg)", yaxis_title="Pressão (bar)", yaxis_type="log", margin=dict(l=20, r=20, t=30, b=20), height=500)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
