@@ -12,7 +12,9 @@ import Leachman
 st.set_page_config(page_title="Simulador H2 - PFD Flow", layout="wide")
 st.title("⚡ Simulador Interativo: Condicionamento de $H_2$")
 
-# INICIALIZAÇÃO DO SESSION STATE PARA MANTER OS RESULTADOS NA TELA
+# ==========================================
+# 0. INICIALIZAÇÃO DE MEMÓRIA (EVITA LOOP)
+# ==========================================
 if "simulacao_realizada" not in st.session_state:
     st.session_state.simulacao_realizada = False
 if "modo_comparativo" not in st.session_state:
@@ -96,99 +98,107 @@ def rodar_simulacao(mod_key):
 # 3. CONTROLES DE EXECUÇÃO
 # ==========================================
 col_btn1, col_btn2 = st.columns(2)
-# Correção do warning usando width='stretch' em vez de use_container_width=True
 executar_click = col_btn1.button(f"Executar Simulação ({model_key})", type="primary", width="stretch")
 comparar_click = col_btn2.button("🔍 Comparar Ideal vs Real", width="stretch")
 
-if executar_click:
-    st.session_state.simulacao_realizada = True
-    st.session_state.modo_comparativo = False
-
-if comparar_click:
-    st.session_state.simulacao_realizada = True
-    st.session_state.modo_comparativo = True
-
-# ==========================================
-# 4. RENDERIZAÇÃO DA INTERFACE (MANTIDA PELO SESSION STATE)
-# ==========================================
-if st.session_state.simulacao_realizada:
-    with st.spinner("Processando balanços termodinâmicos..."):
-        if st.session_state.modo_comparativo:
+if executar_click or comparar_click:
+    with st.spinner("Processando balanços termodinâmicos e gerando PFD..."):
+        if comparar_click:
             str_ideal, eq_ideal = rodar_simulacao("IDEAL")
             str_real, eq_real = rodar_simulacao("REAL")
-            stream_results, equipment_results = str_real, eq_real
+            
+            st.session_state.str_ideal = str_ideal
+            st.session_state.eq_ideal = eq_ideal
+            st.session_state.str_real = str_real
+            st.session_state.eq_real = eq_real
+            st.session_state.stream_results = str_real
+            st.session_state.equipment_results = eq_real
+            st.session_state.modo_comparativo = True
         else:
             stream_results, equipment_results = rodar_simulacao(model_key)
+            st.session_state.stream_results = stream_results
+            st.session_state.equipment_results = equipment_results
+            st.session_state.modo_comparativo = False
+        
+        # Gera o grafo do PFD interativo e salva na memória
+        nodes = []
+        edges = []
+        
+        nodes.append(StreamlitFlowNode(
+            id='feed',
+            pos=(50, 150),
+            data={'content': f"🟡 Alimentação\n{P1} bar | {T1}°C"},
+            node_type='input',
+            source_position='right',
+            target_position='left'
+        ))
+
+        prev_node = 'feed'
+        x_pos = 50
+        
+        for idx, (equip, metric) in enumerate(zip(flowsheet_sequence, st.session_state.equipment_results)):
+            node_id = f"block_{idx}"
+            x_pos += 300
+            
+            node_text = f"⚙️ {equip}\n"
+            if "W_dot [kW]" in metric and metric["W_dot [kW]"] != 0:
+                node_text += f"W = {metric['W_dot [kW]']:.1f} kW\n"
+            if "Q_dot [kW]" in metric and metric["Q_dot [kW]"] != 0:
+                node_text += f"Q = {metric['Q_dot [kW]']:.1f} kW\n"
+            node_text += f"Exergia Dest. = {metric['E_destruida [kW]']:.1f} kW"
+
+            nodes.append(StreamlitFlowNode(
+                id=node_id,
+                pos=(x_pos, 150),
+                data={'content': node_text},
+                node_type='default',
+                source_position='right',
+                target_position='left'
+            ))
+
+            st_out = st.session_state.stream_results[idx]
+            edges.append(StreamlitFlowEdge(
+                id=f"edge_{idx}",
+                source=prev_node,
+                target=node_id,
+                animated=True,
+                label=f"S{idx+1} ({st_out['P [bar]']:.0f} bar, {st_out['T [°C]']:.1f} °C)"
+            ))
+            prev_node = node_id
+
+        x_pos += 300
+        st_final = st.session_state.stream_results[-1]
+        nodes.append(StreamlitFlowNode(
+            id='product',
+            pos=(x_pos, 150),
+            data={'content': f"📦 Produto H2\n{st_final['P [bar]']:.0f} bar | {st_final['T [°C]']:.1f}°C"},
+            node_type='output',
+            source_position='right',
+            target_position='left'
+        ))
+        edges.append(StreamlitFlowEdge(
+            id="edge_final",
+            source=prev_node,
+            target='product',
+            animated=True,
+            label=f"S{len(st.session_state.stream_results)}"
+        ))
+
+        # O SEGREDO DO LOOP INFINITO ESTÁ AQUI: Salva o estado encapsulado no Session State
+        st.session_state.flow_state = StreamlitFlowState(nodes, edges)
+        st.session_state.simulacao_realizada = True
+
+# ==========================================
+# 4. RENDERIZAÇÃO DA INTERFACE (MANTIDA NA MEMÓRIA)
+# ==========================================
+if st.session_state.simulacao_realizada:
     
     # ------------------------------------------
     # RENDERIZAÇÃO DO PFD INTERATIVO
     # ------------------------------------------
     st.subheader("Process Flow Diagram (PFD)")
-    nodes = []
-    edges = []
     
-    nodes.append(StreamlitFlowNode(
-        id='feed',
-        pos=(50, 150),
-        data={'content': f"🟡 Alimentação\n{P1} bar | {T1}°C"},
-        node_type='input',
-        source_position='right',
-        target_position='left'
-    ))
-
-    prev_node = 'feed'
-    x_pos = 50
-    
-    for idx, (equip, metric) in enumerate(zip(flowsheet_sequence, equipment_results)):
-        node_id = f"block_{idx}"
-        x_pos += 300
-        
-        node_text = f"⚙️ {equip}\n"
-        if "W_dot [kW]" in metric and metric["W_dot [kW]"] != 0:
-            node_text += f"W = {metric['W_dot [kW]']:.1f} kW\n"
-        if "Q_dot [kW]" in metric and metric["Q_dot [kW]"] != 0:
-            node_text += f"Q = {metric['Q_dot [kW]']:.1f} kW\n"
-        node_text += f"Exergia Dest. = {metric['E_destruida [kW]']:.1f} kW"
-
-        nodes.append(StreamlitFlowNode(
-            id=node_id,
-            pos=(x_pos, 150),
-            data={'content': node_text},
-            node_type='default',
-            source_position='right',
-            target_position='left'
-        ))
-
-        st_out = stream_results[idx]
-        edges.append(StreamlitFlowEdge(
-            id=f"edge_{idx}",
-            source=prev_node,
-            target=node_id,
-            animated=True,
-            label=f"S{idx+1} ({st_out['P [bar]']:.0f} bar, {st_out['T [°C]']:.1f} °C)"
-        ))
-        prev_node = node_id
-
-    x_pos += 300
-    st_final = stream_results[-1]
-    nodes.append(StreamlitFlowNode(
-        id='product',
-        pos=(x_pos, 150),
-        data={'content': f"📦 Produto H2\n{st_final['P [bar]']:.0f} bar | {st_final['T [°C]']:.1f}°C"},
-        node_type='output',
-        source_position='right',
-        target_position='left'
-    ))
-    edges.append(StreamlitFlowEdge(
-        id="edge_final",
-        source=prev_node,
-        target='product',
-        animated=True,
-        label=f"S{len(stream_results)}"
-    ))
-
-    flow_state = StreamlitFlowState(nodes, edges)
-    streamlit_flow("pfd_canvas", state=flow_state, fit_view=True, height=400)
+    streamlit_flow("pfd_canvas", state=st.session_state.flow_state, fit_view=True, height=400)
     
     st.divider()
 
@@ -197,8 +207,8 @@ if st.session_state.simulacao_realizada:
     # ------------------------------------------
     if st.session_state.modo_comparativo:
         st.subheader("Comparativo de Desempenho Termodinâmico")
-        eq_i_dict = {m["Tipo"]: m for m in eq_ideal}
-        eq_r_dict = {m["Tipo"]: m for m in eq_real}
+        eq_i_dict = {m["Tipo"]: m for m in st.session_state.eq_ideal}
+        eq_r_dict = {m["Tipo"]: m for m in st.session_state.eq_real}
         comp_data = []
 
         if "Compressor" in eq_r_dict:
@@ -223,7 +233,7 @@ if st.session_state.simulacao_realizada:
                 {"Métrica": "Potência Recuperada W_t (kW)", "Gás Ideal": eq_i_dict["Expansor"]["W_recuperado [kW]"], "Gás Real (Leachman)": eq_r_dict["Expansor"]["W_recuperado [kW]"]}
             ])
         
-        comp_data.append({"Métrica": "Exergia Destruída Total (kW)", "Gás Ideal": sum(m["E_destruida [kW]"] for m in eq_ideal), "Gás Real (Leachman)": sum(m["E_destruida [kW]"] for m in eq_real)})
+        comp_data.append({"Métrica": "Exergia Destruída Total (kW)", "Gás Ideal": sum(m["E_destruida [kW]"] for m in st.session_state.eq_ideal), "Gás Real (Leachman)": sum(m["E_destruida [kW]"] for m in st.session_state.eq_real)})
 
         for row in comp_data:
             r_val = row["Gás Real (Leachman)"]
@@ -239,9 +249,9 @@ if st.session_state.simulacao_realizada:
     
     with col_tab:
         st.subheader("Correntes Termodinâmicas")
-        st.dataframe(pd.DataFrame(stream_results).style.format({"T [°C]": "{:.2f}", "P [bar]": "{:.2f}", "H [kJ/kg]": "{:.2f}", "S [kJ/(kg K)]": "{:.4f}"}))
+        st.dataframe(pd.DataFrame(st.session_state.stream_results).style.format({"T [°C]": "{:.2f}", "P [bar]": "{:.2f}", "H [kJ/kg]": "{:.2f}", "S [kJ/(kg K)]": "{:.4f}"}))
         st.subheader("Balanço de Exergia")
-        df_eq = pd.DataFrame(equipment_results).drop(columns=["st_s", "T_in [°C]"], errors="ignore")
+        df_eq = pd.DataFrame(st.session_state.equipment_results).drop(columns=["st_s", "T_in [°C]"], errors="ignore")
         st.dataframe(df_eq.style.format(precision=2))
 
     with col_graf:
@@ -256,14 +266,14 @@ if st.session_state.simulacao_realizada:
         except:
             pass
 
-        H_vals = [s['H [kJ/kg]'] for s in stream_results]
-        P_vals = [s['P [bar]'] for s in stream_results]
-        fig.add_trace(go.Scatter(x=H_vals, y=P_vals, mode='lines+markers+text', text=[f"S{i+1}" for i in range(len(stream_results))], textposition="top center", name='Evolução Real', line=dict(color='red', width=3), marker=dict(size=10)))
+        H_vals = [s['H [kJ/kg]'] for s in st.session_state.stream_results]
+        P_vals = [s['P [bar]'] for s in st.session_state.stream_results]
+        fig.add_trace(go.Scatter(x=H_vals, y=P_vals, mode='lines+markers+text', text=[f"S{i+1}" for i in range(len(st.session_state.stream_results))], textposition="top center", name='Evolução Real', line=dict(color='red', width=3), marker=dict(size=10)))
 
-        for m in equipment_results:
+        for m in st.session_state.equipment_results:
             if "st_s" in m:
                 idx = int(m["Etapa"][0])
-                fig.add_trace(go.Scatter(x=[stream_results[idx-1]["H [kJ/kg]"], m["st_s"]["H"]], y=[stream_results[idx-1]["P [bar]"], m["st_s"]["P_bar"]], mode='lines+markers', name=f'Isentrópica ({m["Tipo"]})', line=dict(color='blue', width=2, dash='dot'), marker=dict(size=6)))
+                fig.add_trace(go.Scatter(x=[st.session_state.stream_results[idx-1]["H [kJ/kg]"], m["st_s"]["H"]], y=[st.session_state.stream_results[idx-1]["P [bar]"], m["st_s"]["P_bar"]], mode='lines+markers', name=f'Isentrópica ({m["Tipo"]})', line=dict(color='blue', width=2, dash='dot'), marker=dict(size=6)))
 
         fig.update_layout(xaxis_title="Entalpia (kJ/kg)", yaxis_title="Pressão (bar)", yaxis_type="log", margin=dict(l=20, r=20, t=30, b=20), height=500)
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
