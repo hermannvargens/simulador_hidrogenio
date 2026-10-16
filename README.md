@@ -1,6 +1,6 @@
 # Simulador Interativo de Condicionamento e Expansão de H₂
 
-LINK DE ACESSO [https://pvhwbeder33zgds2rpugc2.streamlit.app/#diagrama-p-h-interativo]
+DISPONÍVEL EM: https://pvhwbeder33zgds2rpugc2.streamlit.app/#diagrama-p-h-interativo
 
 Aplicativo web desenvolvido em Python e Streamlit para modelagem termodinâmica e análise exergética de sistemas de condicionamento de hidrogênio puro. A ferramenta permite a construção dinâmica de fluxogramas de processo e resolve balanços de massa, energia e entropia operando sob diferentes equações de estado.
 
