@@ -1,4 +1,3 @@
-# unit_operations.py
 import numpy as np
 
 def simular_compressor(stream_in, P_out, eta_s, thermo):
@@ -21,7 +20,7 @@ def simular_compressor(stream_in, P_out, eta_s, thermo):
         "S_gen [kW/K]": S_gen,
         "E_destruida [kW]": E_d,
         "T_out [°C]": st_out["T_C"],
-        "st_s": st_s  # Adicionado para a tabela comparativa
+        "st_s": st_s
     }
     return st_out, metrics
 
@@ -63,7 +62,7 @@ def simular_valvula(stream_in, P_out, thermo):
         "Q_dot [kW]": 0.0,
         "S_gen [kW/K]": S_gen,
         "E_destruida [kW]": E_d,
-        "T_in [°C]": stream_in["T_C"], # Adicionado para exibir Delta T (Joule-Thomson)
+        "T_in [°C]": stream_in["T_C"],
         "T_out [°C]": st_out["T_C"]
     }
     return st_out, metrics
@@ -89,6 +88,6 @@ def simular_expansor(stream_in, P_out, eta_s, thermo):
         "S_gen [kW/K]": S_gen,
         "E_destruida [kW]": E_d,
         "T_out [°C]": st_out["T_C"],
-        "st_s": st_s  # Adicionado para a tabela comparativa
+        "st_s": st_s
     }
     return st_out, metrics
