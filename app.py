@@ -10,7 +10,7 @@ import unit_operations as uo
 import Leachman
 
 st.set_page_config(page_title="Simulador H2 - PFD Flow", layout="wide")
-st.title("⚡ Simulador Interativo: Condicionamento de $H_2$")
+st.title("Simulador Interativo: Condicionamento de $H_2$")
 
 # ==========================================
 # 0. INICIALIZAÇÃO DE MEMÓRIA E ESTADOS
